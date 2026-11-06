@@ -50,6 +50,11 @@ public sealed class LauncherConfig
     /// <summary>Modpack version currently installed on disk, or null for a fresh install.</summary>
     [JsonPropertyName("installedModpackVersion")] public string? InstalledModpackVersion { get; set; }
 
+    [JsonPropertyName("performanceProfileRevision")] public int PerformanceProfileRevision { get; set; }
+
+    [JsonPropertyName("performanceProfileGeneration")] public int PerformanceProfileGeneration { get; set; }
+    [JsonPropertyName("performanceProfileApplied")] public Dictionary<string, int> PerformanceProfileApplied { get; set; } = new();
+
     [JsonPropertyName("game")] public GameSettings Game { get; set; } = new();
 
     /// <summary>Config schema version, so future migrations have something to branch on.</summary>

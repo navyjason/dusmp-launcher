@@ -39,6 +39,10 @@
     if (name === 'main' && state.launcherUpdatePending) name = state.fatalErrorKey ? 'error' : 'loading';
     if (name === uiScreen && document.querySelector('.screen.is-active')) return;
     uiScreen = name;
+    if (name === 'onboarding-optional-mods') {
+      $('mods-back').hidden = !editingSettings && !state.firstLaunch && state.screen === name;
+      text('mods-continue', t(!state.firstLaunch || editingSettings ? 'common.done' : 'onboarding.optionalMods.action'));
+    }
     document.querySelectorAll('.screen').forEach(e => e.classList.toggle('is-active', e.dataset.screen === name));
     // Arriving at the account step always offers the choice again. Leaving it
     // with the offline name form open meant coming back showed that form on its
@@ -73,9 +77,11 @@
   }
   function setImage(id, url) { const img = $(id); const safe = safeUrl(url); if (img && img.getAttribute('src') !== safe) { img.onerror = () => { img.onerror = null; img.src = 'app://launcher/assets/icon.png'; }; img.src = safe; } }
   // Display names for the launchers DUSMP can hand sign-in to.
-  const externalNames = { prism: 'Prism Launcher', official: 'Minecraft Launcher' };
+  const externalNames = { modrinth: 'Modrinth App', curseforge: 'CurseForge', prism: 'Prism Launcher', official: 'Minecraft Launcher', multimc: 'MultiMC', polymc: 'PolyMC' };
   function renderState(s) {
     const oldScreen = state.screen, wasReady = state.readyToPlay; state = s || state;
+    if (uiScreen === 'onboarding-optional-mods')
+      $('mods-back').hidden = !editingSettings && !state.firstLaunch && state.screen === 'onboarding-optional-mods';
     text('error-message', state.fatalErrorKey ? (table[state.fatalErrorKey] ? t(state.fatalErrorKey) : t('error.unknown')) : '');
     text('error-detail', state.fatalErrorDetail || '');
     if (state.launcherUpdatePending && state.screen === 'main') screen('main');
@@ -114,6 +120,7 @@
     $('maintenance-banner').hidden = !state.status?.maintenance;
     text('maintenance-text', localized(state.status?.message));
     const running = ['preparing', 'launching', 'running'].includes(state.gameState);
+    $('btn-optional-mods').disabled = running;
     const live = !external && (state.gameState === 'running' || state.gameState === 'launching');
     const play = $('btn-play');
     play.dataset.action = live ? 'stop' : 'play';
@@ -427,11 +434,11 @@
     $('device-back').hidden = !editingSettings && !state.firstLaunch;
     for (const id of ['low8gb', 'default', 'smooth']) {
       const button = $('device-' + id);
-      button.classList.toggle('is-selected', preset === id);
-      button.setAttribute('aria-pressed', String(preset === id));
+      button.classList.toggle('is-selected', preset === (id === 'default' ? 'standard' : id));
+      button.setAttribute('aria-pressed', String(preset === (id === 'default' ? 'standard' : id)));
     }
-    text('settings-device-value', ['low8gb', 'default', 'smooth'].includes(preset)
-      ? t('onboarding.device.' + preset + '.name') : t('settings.devicePreset.unselected'));
+    text('settings-device-value', ['low8gb', 'standard', 'smooth'].includes(preset)
+      ? t('onboarding.device.' + (preset === 'standard' ? 'default' : preset) + '.name') : t('settings.devicePreset.unselected'));
   }
   async function selectDevicePreset(preset) {
     return choose(async () => {
@@ -538,7 +545,7 @@
       // A <label> makes the whole row the hit area: the switch alone is a 42px
       // target in a 60px row, which is what made it feel misaligned rather than
       // any actual offset.
-      const row = document.createElement('label'); row.className = 'mod-row';
+      const row = document.createElement('label'); row.className = 'mod-row ' + (m.enabled ? 'is-enabled' : 'is-disabled');
       const description = localized(o.description);
       row.innerHTML = `<img class="mod-icon" src="${escapeHtml(safeUrl(o.icon, MOD_ICON_FALLBACK))}" alt="" loading="lazy">`
         + `<span class="mod-body">`
@@ -550,7 +557,11 @@
         + `</span>`;
       row.querySelector('.mod-icon').onerror = e => { e.target.onerror = null; e.target.src = MOD_ICON_FALLBACK; };
       const sw = document.createElement('input'); sw.type = 'checkbox'; sw.className = 'switch'; sw.checked = !!m.enabled; sw.setAttribute('aria-label', t('common.enabled', { name: o.name || o.id }));
-      sw.onchange = async () => { sw.disabled = true; try { await send('toggleOptionalMod', { id: o.id, enabled: sw.checked }); renderTotals(); } catch (e) { sw.checked = !sw.checked; showError(e); } finally { sw.disabled = false; } };
+      const status = document.createElement('span'); status.className = 'mod-state';
+      const paint = () => { row.classList.toggle('is-enabled', sw.checked); row.classList.toggle('is-disabled', !sw.checked); status.textContent = t(sw.checked ? 'installedMods.enabled' : 'installedMods.disabled'); };
+      paint();
+      sw.onchange = async () => { sw.disabled = true; paint(); try { await send('toggleOptionalMod', { id: o.id, enabled: sw.checked }); renderTotals(); } catch (e) { sw.checked = !sw.checked; paint(); showError(e); } finally { sw.disabled = false; } };
+      row.querySelector('.mod-body').append(status);
       row.append(sw); $('mods-list').append(row);
     }
     $('mods-empty').hidden = mods.length > 0; renderTotals();
@@ -597,7 +608,7 @@
     externalLoading = true;
     try {
       const list = await send('getExternalLaunchers'); $('launcher-list').replaceChildren();
-      for (const item of list.sort((a, b) => Number(b.canManage) - Number(a.canManage) || Number(b.detected) - Number(a.detected))) {
+      for (const item of list) {
         const card = document.createElement('article'); card.className = 'launcher-card';
         card.innerHTML = `<img class="launcher-mark" src="${escapeHtml(safeUrl(item.iconUrl))}" alt="" width="44" height="44"><div class="launcher-card-body"><h2>${escapeHtml(item.name)}</h2><p>${escapeHtml(t(item.detected ? 'onboarding.external.detected' : 'onboarding.external.notDetected'))}${item.installationKind ? ' · ' + escapeHtml(item.installationKind) : ''}</p><details><summary>${escapeHtml(t('onboarding.external.details'))}</summary><small>${escapeHtml(item.root || '')}</small></details></div><button type="button" data-select-launcher class="btn ${item.detected ? 'btn-primary' : 'btn-ghost'}" ${item.canManage ? '' : 'disabled'}>${escapeHtml(t(!item.canManage ? 'onboarding.external.unavailable' : item.detected ? 'onboarding.external.select' : 'onboarding.external.chooseFolder'))}</button>`;
         card.querySelector('img').onerror = e => { e.target.onerror = null; e.target.src = 'app://launcher/assets/launchers/generic.svg'; };
@@ -606,7 +617,7 @@
           if (!result?.selected) return;
           await refreshState(); screen(editingSettings ? 'settings' : state.screen);
         });
-        card.querySelector('[data-select-launcher]').onclick = () => selectLauncher(!item.detected);
+        card.querySelector('[data-select-launcher]').onclick = () => selectLauncher(['modrinth', 'curseforge'].includes(item.id) || !item.detected);
         if (item.canManage && item.detected) {
           const folder = document.createElement('button'); folder.type = 'button'; folder.className = 'btn btn-ghost btn-small';
           folder.textContent = t('onboarding.external.chooseFolder'); folder.onclick = () => selectLauncher(true);
@@ -628,7 +639,7 @@
     return /^(https:\/\/|(?:app:\/\/launcher|http:\/\/localhost)\/assets\/|data:image\/(?:png|svg\+xml);base64,)/.test(x || '') ? x : fallback;
   }
   function toast(msg) { const e = document.createElement('div'); e.className = 'toast'; e.textContent = msg; $('toasts').append(e); setTimeout(() => e.remove(), 6000); }
-  function showError(e) { if (['error.auth.cancelled', 'error.cancelled'].includes(e?.key)) return; toast(e?.key && table[e.key] ? t(e.key) : e?.message || t('error.unknown')); }
+  function showError(e) { if (['error.auth.cancelled', 'error.cancelled'].includes(e?.key)) return; toast(e?.key === 'error.modpack.configConflict' && e?.message ? e.message : e?.key && table[e.key] ? t(e.key) : e?.message || t('error.unknown')); }
   function showAuthError(message, detail) {
     $('auth-error').hidden = false;
     text('auth-error-text', message);
@@ -782,10 +793,10 @@
     screen(target);
   }
   bind('playmode-dusmp', async () => { await send('setPlayMode', { mode: 'dusmp' }); await refreshState(); screen(state.screen); });
-  bind('playmode-external', async () => { if (!editingSettings) { await send('setPlayMode', { mode: 'external' }); await refreshState(); } screen('onboarding-external-launcher'); });
+  bind('playmode-external', async () => { if (!editingSettings) { await send('setPlayMode', { mode: 'external' }); await refreshState(); } screen(editingSettings ? 'onboarding-external-launcher' : state.screen); });
   bind('playmode-back', () => goBack('onboarding-device'));
   bind('device-low8gb', () => selectDevicePreset('low8gb'));
-  bind('device-default', () => selectDevicePreset('default'));
+  bind('device-default', () => selectDevicePreset('standard'));
   bind('device-smooth', () => selectDevicePreset('smooth'));
   bind('device-back', () => goBack('onboarding-language'));
   bind('external-back', () => goBack('onboarding-play-mode'));
@@ -800,6 +811,7 @@
   bind('btn-device-fallback', async () => { if (authCancelPromise) return; await cancelMicrosoftLogin(); await loginMicrosoft({ useDeviceCode: true }); });
   bind('btn-cancel-device', () => cancelMicrosoftLogin());
   bind('mods-continue', async () => { if (editingSettings) return screen('settings'); await send('finishOnboarding'); await refreshState(); });
+  bind('btn-optional-mods', () => { editingSettings = false; screen('onboarding-optional-mods'); });
   bind('btn-play', async () => {
     const play = $('btn-play');
     if (play.dataset.action === 'stop') {

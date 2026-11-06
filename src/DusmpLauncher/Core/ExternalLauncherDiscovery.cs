@@ -234,7 +234,7 @@ public sealed class ExternalLauncherDiscovery
         // Everything DUSMP has an adapter for: the MultiMC family gets a real
         // instance, the official launcher gets a profile pointed at a game
         // directory.
-        var manageable = MmcFamily.Contains(def.Id) || def.Id == "official";
+        var manageable = MmcFamily.Contains(def.Id) || def.Id is "official" or "modrinth" or "curseforge";
         return new(def.Id, def.Name, detected, root, _environment.IsWindows ? "Windows" : "Linux", manageable, null)
         {
             // An installed launcher already has its real logo on disk, which is

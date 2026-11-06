@@ -12,6 +12,8 @@ public static class JvmPresets
     public const string Low8Gb = "low8gb";
     public const string Default = "default";
     public const string Smooth = "smooth";
+    public const string Standard = "standard";
+    public const int ProfileRevision = 1;
 
     private static readonly HashSet<string> CollectorOptions = new(StringComparer.Ordinal)
     {
@@ -30,7 +32,7 @@ public static class JvmPresets
         "ZStatisticsInterval", "SoftMaxHeapSize",
     };
 
-    public static bool IsKnown(string? id) => Normalize(id) is Low8Gb or Default or Smooth;
+    public static bool IsKnown(string? id) => Normalize(id) is Low8Gb or Default or Smooth or Standard;
 
     /// <summary>Applies a chosen preset without discarding unrelated custom arguments.</summary>
     public static void Apply(GameSettings settings, string id)
@@ -38,10 +40,11 @@ public static class JvmPresets
         ArgumentNullException.ThrowIfNull(settings);
         var preset = RequireKnown(id);
         settings.JvmPreset = preset;
-        settings.MinRamMb = preset == Smooth ? 2048 : 1024;
+        settings.MinRamMb = preset is Smooth or Standard ? 2048 : 1024;
         settings.MaxRamMb = preset switch
         {
             Low8Gb => 4096,
+            Standard => 8192,
             Smooth => 10240,
             _ => 6144,
         };
@@ -52,7 +55,7 @@ public static class JvmPresets
     /// MLaunchOption's memory fields, and the preset owns collector selection.
     /// Legacy configurations without a preset retain their original arguments.
     /// </summary>
-    public static IReadOnlyList<string> BuildArguments(GameSettings settings)
+    public static IReadOnlyList<string> BuildArguments(GameSettings settings, bool useLowMemoryTuning = true)
     {
         ArgumentNullException.ThrowIfNull(settings);
         var custom = string.IsNullOrWhiteSpace(settings.ExtraJvmArgs)
@@ -64,7 +67,7 @@ public static class JvmPresets
             return custom;
 
         var preset = RequireKnown(settings.JvmPreset);
-        var arguments = custom.Where(argument => !ConflictsWithPreset(argument, preset)).ToList();
+        var arguments = custom.Where(argument => !ConflictsWithPreset(argument, preset, useLowMemoryTuning)).ToList();
         if (preset == Smooth)
         {
             arguments.Add("-XX:+UseZGC");
@@ -73,11 +76,18 @@ public static class JvmPresets
         else
         {
             arguments.Add("-XX:+UseG1GC");
+            if (preset == Low8Gb && useLowMemoryTuning)
+            {
+                arguments.Add("-XX:-ClassUnloadingWithConcurrentMark");
+                arguments.Add("-XX:MinHeapFreeRatio=10");
+                arguments.Add("-XX:MaxHeapFreeRatio=20");
+                arguments.Add("-XX:G1PeriodicGCInterval=30000");
+            }
         }
         return arguments;
     }
 
-    private static bool ConflictsWithPreset(string argument, string preset)
+    private static bool ConflictsWithPreset(string argument, string preset, bool useLowMemoryTuning)
     {
         if (argument.StartsWith("-Xms", StringComparison.Ordinal)
             || argument.StartsWith("-Xmx", StringComparison.Ordinal))
@@ -90,7 +100,8 @@ public static class JvmPresets
         var equals = name.IndexOf('=');
         if (equals >= 0) name = name[..equals];
 
-        return CollectorOptions.Contains(name)
+        return (name is "ClassUnloadingWithConcurrentMark" or "MinHeapFreeRatio" or "MaxHeapFreeRatio" or "G1PeriodicGCInterval" or "G1PeriodicGCInvokesConcurrent" && (preset == Standard || preset == Low8Gb && useLowMemoryTuning))
+            || CollectorOptions.Contains(name)
             || name is "InitialHeapSize" or "MinHeapSize" or "MaxHeapSize"
             || (preset == Smooth && name.StartsWith("G1", StringComparison.Ordinal))
             || (preset != Smooth && ZgcOptions.Contains(name));
@@ -101,7 +112,7 @@ public static class JvmPresets
     private static string RequireKnown(string? id)
     {
         var preset = Normalize(id);
-        if (preset is not (Low8Gb or Default or Smooth))
+        if (preset is not (Low8Gb or Default or Smooth or Standard))
             throw new ArgumentException("Unknown JVM device preset.", nameof(id));
         return preset;
     }

@@ -19,6 +19,7 @@ public sealed class WebBridge
     private readonly Action _minimize;
     private readonly Action _close;
     private readonly Func<Task<string?>> _chooseFolder;
+    private readonly Func<string, Task<string?>> _chooseExternalProfile;
     private readonly Func<Task<string?>> _choosePng;
     private readonly Action _openSkinWindow;
     private readonly Func<Task<string[]?>> _chooseMods;
@@ -37,7 +38,8 @@ public sealed class WebBridge
         Func<Task<string?>>? chooseFolder = null,
         Func<Task<string?>>? choosePng = null,
         Action? openSkinWindow = null,
-        Func<Task<string[]?>>? chooseMods = null)
+        Func<Task<string[]?>>? chooseMods = null,
+        Func<string, Task<string?>>? chooseExternalProfile = null)
     {
         _core = core;
         _languages = languages;
@@ -45,6 +47,7 @@ public sealed class WebBridge
         _minimize = minimize;
         _close = close;
         _chooseFolder = chooseFolder ?? (() => Task.FromResult<string?>(null));
+        _chooseExternalProfile = chooseExternalProfile ?? (_ => _chooseFolder());
         _choosePng = choosePng ?? (() => Task.FromResult<string?>(null));
         _openSkinWindow = openSkinWindow ?? (() => { });
         _chooseMods = chooseMods ?? (() => Task.FromResult<string[]?>(null));
@@ -162,7 +165,7 @@ public sealed class WebBridge
                 var chooseFolder = request.Payload is { ValueKind: JsonValueKind.Object } selection && selection.TryGetProperty("chooseFolder", out var choose) && choose.ValueKind == JsonValueKind.True;
                 if (chooseFolder)
                 {
-                    path = await _chooseFolder().ConfigureAwait(false);
+                    path = id is "modrinth" or "curseforge" ? await _chooseExternalProfile(id).ConfigureAwait(false) : await _chooseFolder().ConfigureAwait(false);
                     if (string.IsNullOrWhiteSpace(path)) return new { selected = false };
                 }
                 if (string.IsNullOrWhiteSpace(path))

@@ -1,0 +1,14 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="All Rights Reserved"
+[[mods]]
+modId="dusmp_update_notifier"
+version="1.0.0"
+displayName="DUSMP Update Notifier"
+description='''Notifies the player when a newer DUSMP modpack is available.'''
+[[dependencies.dusmp_update_notifier]]
+modId="neoforge"
+type="required"
+versionRange="[21.1,)"
+ordering="NONE"
+side="CLIENT"

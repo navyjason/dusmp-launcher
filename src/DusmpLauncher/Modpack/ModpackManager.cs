@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using DusmpLauncher.Core;
+using DusmpLauncher.Configuration;
 using DusmpLauncher.Models;
 
 namespace DusmpLauncher.Modpack;
@@ -112,7 +113,7 @@ public sealed class ModpackManager : IModpackManager
             // A write-once file was handed to the player on purpose; dropping it from
             // the manifest means the launcher stops managing it, not that the player's
             // edited config should be destroyed. It simply leaves the ledger at commit.
-            if (entry.WriteOnce)
+            if (entry.WriteOnce || PerformanceProfile.IsProfileFile(entry.Path))
             {
                 _trace?.Invoke($"modpack: releasing write-once file to the player: {entry.Path}");
                 continue;
@@ -205,9 +206,27 @@ public sealed class ModpackManager : IModpackManager
                 return;
             }
 
-            // Write-once and already there: the player's edits win, no hash is read.
+            // The publisher can explicitly hand configuration ownership to the player.
             if (file.WriteOnce)
             {
+                preserved.Add(new PlannedFile(file, FileAction.PreservedByUser, absolute));
+                return;
+            }
+
+            if (PerformanceProfile.IsProfileFile(relative))
+            {
+                // Never silently discard a newly published config. If the old file
+                // is still the publisher's previous version, it is safe to update.
+                // Otherwise require a decision rather than overwrite player edits.
+                if (ledger.TryGet(relative, out var previous) && !previous.WriteOnce &&
+                    !ManagedFileIndex.HashEquals(previous.Sha256, file.Sha256))
+                {
+                    var profileHash = await ManagedFileIndex.ComputeSha256Async(absolute, ct: ct).ConfigureAwait(false);
+                    if (!ManagedFileIndex.HashEquals(profileHash, previous.Sha256))
+                        throw new LauncherException("error.modpack.configConflict", $"The pack updated {relative}, but the existing file was changed. Move or remove that file, then retry; the launcher will download the new version.");
+                    toDownload.Add(new PlannedFile(file, FileAction.Corrupt, absolute));
+                    return;
+                }
                 preserved.Add(new PlannedFile(file, FileAction.PreservedByUser, absolute));
                 return;
             }

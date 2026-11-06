@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using System.Text.Json;
 using DusmpLauncher.Downloads;
+using DusmpLauncher.Configuration;
 using DusmpLauncher.Models;
 
 namespace DusmpLauncher.Core;
@@ -20,7 +21,10 @@ public sealed record ManagedInstallation(string Id, string Launcher, string Plat
 {
     public IReadOnlyList<string> WriteOnceFiles { get; init; } = Array.Empty<string>();
     public string? LauncherRoot { get; init; }
+    public Dictionary<string, ExternalFileStamp> VerifiedFiles { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> ProfilePublishedHashes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }
+public sealed record ExternalFileStamp(long Size, long ModifiedTicks, string Sha256);
 
 /// <summary>Detects supported external launchers and owns only dedicated DUSMP profiles.</summary>
 public sealed class ExternalLauncherManager
@@ -39,6 +43,21 @@ public sealed class ExternalLauncherManager
     }
 
     public IReadOnlyList<ExternalLauncherInfo> Detect() => _discovery.Detect();
+
+    public async Task<ManagedInstallation> SelectExistingProfileAsync(string launcherId, string profilePath, ModpackManifest manifest, CancellationToken ct)
+    {
+        if (launcherId is not ("modrinth" or "curseforge")) throw new LauncherException("error.external.invalidPath", "Unsupported launcher.");
+        var target = Path.GetFullPath(profilePath);
+        EnsureNoLinks(Path.GetPathRoot(target)!, target);
+        ExternalProfileValidator.Validate(launcherId, target, manifest);
+        var records = await ReadRegistryAsync(ct).ConfigureAwait(false);
+        var prior = records.FirstOrDefault(x => x.Managed && x.Launcher == launcherId && Path.GetFullPath(x.InstancePath).Equals(target, PathComparison));
+        var id = prior?.Id ?? "dusmp-" + launcherId + "-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target)))[..12].ToLowerInvariant();
+        var installation = new ManagedInstallation(id, launcherId, RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "windows" : "linux", target, true, prior?.ModpackVersion ?? manifest.Version, prior?.RegisteredAt ?? DateTimeOffset.UtcNow, prior?.ManagedFiles ?? Array.Empty<string>())
+        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), VerifiedFiles = prior?.VerifiedFiles ?? new(StringComparer.OrdinalIgnoreCase), ProfilePublishedHashes = prior?.ProfilePublishedHashes ?? new(StringComparer.OrdinalIgnoreCase), LauncherRoot = Detect().First(x => x.Id == launcherId).Root };
+        await SaveInstallationAsync(installation, ct).ConfigureAwait(false);
+        return installation;
+    }
 
     /// <summary>
     /// Creates a DUSMP instance for a launcher of the MultiMC family.
@@ -77,8 +96,8 @@ public sealed class ExternalLauncherManager
             await File.WriteAllTextAsync(Path.Combine(target, "instance.cfg"), cfg, new UTF8Encoding(false), ct).ConfigureAwait(false);
         await WriteMmcPackAsync(launcherId, target, manifest, ct).ConfigureAwait(false);
         var id = prior?.Id ?? $"dusmp-{launcherId}-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(target))))[..12].ToLowerInvariant();
-        var installation = new ManagedInstallation(id, launcherId, RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "windows" : "linux", target, true, manifest.Version, prior?.RegisteredAt ?? DateTimeOffset.UtcNow, prior?.ManagedFiles ?? Array.Empty<string>())
-        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), LauncherRoot = root };
+        var installation = new ManagedInstallation(id, launcherId, RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "windows" : "linux", target, true, prior?.ModpackVersion ?? manifest.Version, prior?.RegisteredAt ?? DateTimeOffset.UtcNow, prior?.ManagedFiles ?? Array.Empty<string>())
+        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), VerifiedFiles = prior?.VerifiedFiles ?? new(StringComparer.OrdinalIgnoreCase), ProfilePublishedHashes = prior?.ProfilePublishedHashes ?? new(StringComparer.OrdinalIgnoreCase), LauncherRoot = root };
         await SaveInstallationAsync(installation, ct).ConfigureAwait(false);
         return installation;
     }
@@ -133,8 +152,8 @@ public sealed class ExternalLauncherManager
         var id = prior?.Id ?? "dusmp-official-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(target))))[..12].ToLowerInvariant();
         var installation = new ManagedInstallation(id, "official",
             RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "windows" : "linux",
-            target, true, manifest.Version, prior?.RegisteredAt ?? DateTimeOffset.UtcNow, prior?.ManagedFiles ?? Array.Empty<string>())
-        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), LauncherRoot = root };
+            target, true, prior?.ModpackVersion ?? manifest.Version, prior?.RegisteredAt ?? DateTimeOffset.UtcNow, prior?.ManagedFiles ?? Array.Empty<string>())
+        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), VerifiedFiles = prior?.VerifiedFiles ?? new(StringComparer.OrdinalIgnoreCase), ProfilePublishedHashes = prior?.ProfilePublishedHashes ?? new(StringComparer.OrdinalIgnoreCase), LauncherRoot = root };
 
         await SaveInstallationAsync(installation, ct).ConfigureAwait(false);
         return installation;
@@ -203,19 +222,51 @@ public sealed class ExternalLauncherManager
         await StartExternalAsync(start, ct).ConfigureAwait(false);
     }
 
-    public async Task SyncManagedFilesAsync(ManagedInstallation installation, ModpackManifest manifest, IReadOnlyDictionary<string,bool> optional, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> SyncManagedFilesAsync(ManagedInstallation installation, ModpackManifest manifest, IReadOnlyDictionary<string,bool> optional, CancellationToken ct = default)
     {
         if (!installation.Managed) throw new LauncherException("error.external.instanceExists", "This instance is not managed by DUSMP.");
         var registered = (await ReadRegistryAsync(ct).ConfigureAwait(false)).FirstOrDefault(x => x.Id == installation.Id && x.Managed &&
             Path.GetFullPath(x.InstancePath).Equals(Path.GetFullPath(installation.InstancePath), PathComparison));
         if (registered is null) throw new LauncherException("error.external.instanceExists", "This instance is not registered with DUSMP.");
         installation = registered;
+        if (installation.Launcher is "modrinth" or "curseforge")
+            ExternalProfileValidator.Validate(installation.Launcher, installation.InstancePath, manifest);
         var target = ContentRoot(installation);
         EnsureNoLinks(installation.InstancePath, target);
         Directory.CreateDirectory(target);
         var selected = manifest.Files.Where(f => (f.OptionalId is null || optional.GetValueOrDefault(f.OptionalId, true)) && LauncherPaths.IsDeletable(f.Path)).ToArray();
         var wanted = selected.Select(f => f.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var writeOnce = new HashSet<string>(installation.WriteOnceFiles, StringComparer.OrdinalIgnoreCase);
+        var previouslyManaged = new HashSet<string>(installation.ManagedFiles, StringComparer.OrdinalIgnoreCase);
+        var stamps = new Dictionary<string, ExternalFileStamp>(installation.VerifiedFiles ?? new(), StringComparer.OrdinalIgnoreCase);
+        var oldProfileHashes = new Dictionary<string, string>(installation.ProfilePublishedHashes ?? new(), StringComparer.OrdinalIgnoreCase);
+        var updatedProfiles = new List<string>();
+        var toRemove = new List<(string Path, long Size, long Ticks)>();
+        if (installation.Launcher is "modrinth" or "curseforge")
+        {
+            var wantedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in selected.Where(f => IsModJar(f.Path)))
+            {
+                var source = _paths.ResolveInstanceFile(entry.Path);
+                if (File.Exists(source)) wantedIds.UnionWith(ExternalModConflicts.ReadIds(source));
+            }
+            var modsDirectory = Path.Combine(target, "mods");
+            EnsureNoLinks(target, modsDirectory);
+            if (Directory.Exists(modsDirectory))
+                foreach (var existing in Directory.EnumerateFiles(modsDirectory, "*.jar", SearchOption.TopDirectoryOnly))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var relative = "mods/" + Path.GetFileName(existing);
+                    if (wanted.Contains(relative)) continue;
+                    EnsureNoLinks(target, existing);
+                    var ids = ExternalModConflicts.ReadIds(existing);
+                    if (!ids.Any(wantedIds.Contains)) continue;
+                    if (!ids.All(wantedIds.Contains))
+                        throw new LauncherException("error.external.invalidPath", $"The mod {Path.GetFileName(existing)} also contains unrelated mods. Disable it manually before syncing.");
+                    var stat = new FileInfo(existing);
+                    toRemove.Add((existing, stat.Length, stat.LastWriteTimeUtc.Ticks));
+                }
+        }
         foreach (var entry in selected)
         {
             ct.ThrowIfCancellationRequested(); var relative = entry.Path;
@@ -241,20 +292,65 @@ public sealed class ExternalLauncherManager
                 }
             }
             if (!File.Exists(source)) throw new LauncherException("error.download.failed", "Missing staged modpack file: " + relative);
-            if ((entry.WriteOnce || writeOnce.Contains(relative)) && File.Exists(dest)) { writeOnce.Add(relative); continue; }
-            if (File.Exists(dest) && new FileInfo(dest).Length == entry.Size
-                && string.Equals(await HashUtil.ComputeFileSha256Async(dest, ct: ct).ConfigureAwait(false), entry.Sha256, StringComparison.OrdinalIgnoreCase))
-            { if (entry.WriteOnce) writeOnce.Add(relative); continue; }
+            var preserveExisting = installation.Launcher is not ("modrinth" or "curseforge") || previouslyManaged.Contains(relative);
+            var isProfile = PerformanceProfile.IsProfileFile(relative);
+            oldProfileHashes.TryGetValue(relative, out var oldHash);
+            var changedProfile = isProfile && !entry.WriteOnce && previouslyManaged.Contains(relative) &&
+                (oldHash is not null
+                    ? !string.Equals(oldHash, entry.Sha256, StringComparison.OrdinalIgnoreCase)
+                    : !string.Equals(installation.ModpackVersion, manifest.Version, StringComparison.Ordinal));
+            if (changedProfile && File.Exists(dest))
+            {
+                // Existing selected profiles were explicitly opted in to replacing
+                // conflicting files. Other hosts must retain player edits.
+                if (installation.Launcher is not ("modrinth" or "curseforge"))
+                {
+                    if (oldHash is null || !string.Equals(await HashUtil.ComputeFileSha256Async(dest, ct: ct).ConfigureAwait(false), oldHash, StringComparison.OrdinalIgnoreCase))
+                        throw new LauncherException("error.modpack.configConflict", $"The pack updated {relative}, but the external file was changed. Move or remove it, then retry.");
+                }
+                preserveExisting = false;
+            }
+            if (preserveExisting && (entry.WriteOnce || writeOnce.Contains(relative) || PerformanceProfile.IsProfileFile(relative)) && File.Exists(dest)) { writeOnce.Add(relative); continue; }
+            if (File.Exists(dest))
+            {
+                var stat = new FileInfo(dest);
+                var ticks = stat.LastWriteTimeUtc.Ticks;
+                var cached = stamps.TryGetValue(relative, out var stamp) && stamp.Size == stat.Length && stamp.ModifiedTicks == ticks && string.Equals(stamp.Sha256, entry.Sha256, StringComparison.OrdinalIgnoreCase);
+                if (stat.Length == entry.Size && (cached || string.Equals(await HashUtil.ComputeFileSha256Async(dest, ct: ct).ConfigureAwait(false), entry.Sha256, StringComparison.OrdinalIgnoreCase)))
+                {
+                    stat.Refresh();
+                    if (stat.Length == entry.Size && stat.LastWriteTimeUtc.Ticks == ticks)
+                    {
+                        stamps[relative] = new ExternalFileStamp(stat.Length, ticks, entry.Sha256);
+                        if (entry.WriteOnce) writeOnce.Add(relative);
+                        continue;
+                    }
+                }
+            }
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!); var temp = dest + "." + Guid.NewGuid().ToString("N") + ".dusmp.tmp";
             try
             {
                 await using (var input = File.OpenRead(source)) await using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, true)) await input.CopyToAsync(output, ct).ConfigureAwait(false);
-                if (!entry.WriteOnce && (new FileInfo(temp).Length != entry.Size || !string.Equals(await HashUtil.ComputeFileSha256Async(temp, ct: ct).ConfigureAwait(false), entry.Sha256, StringComparison.OrdinalIgnoreCase)))
+                if (!entry.WriteOnce && !PerformanceProfile.IsProfileFile(relative) && (new FileInfo(temp).Length != entry.Size || !string.Equals(await HashUtil.ComputeFileSha256Async(temp, ct: ct).ConfigureAwait(false), entry.Sha256, StringComparison.OrdinalIgnoreCase)))
                     throw new LauncherException("error.download.failed", "Staged file changed during synchronization: " + relative);
                 File.Move(temp, dest, true);
+                if (isProfile) updatedProfiles.Add(relative);
+                if (!entry.WriteOnce && !PerformanceProfile.IsProfileFile(relative))
+                {
+                    var stat = new FileInfo(dest);
+                    stamps[relative] = new ExternalFileStamp(stat.Length, stat.LastWriteTimeUtc.Ticks, entry.Sha256);
+                }
             }
             finally { if (File.Exists(temp)) File.Delete(temp); }
             if (entry.WriteOnce) writeOnce.Add(relative); else writeOnce.Remove(relative);
+        }
+        foreach (var (path, size, ticks) in toRemove)
+        {
+            var stat = new FileInfo(path);
+            if (!stat.Exists) continue;
+            if (stat.Length != size || stat.LastWriteTimeUtc.Ticks != ticks)
+                throw new LauncherException("error.external.invalidPath", $"The conflicting mod changed during sync: {Path.GetFileName(path)}");
+            File.Delete(path);
         }
         foreach (var old in installation.ManagedFiles.Where(x => !wanted.Contains(x)))
         {
@@ -264,8 +360,11 @@ public sealed class ExternalLauncherManager
             if (File.Exists(file)) File.Delete(file);
         }
         if (ExternalLauncherDiscovery.MmcFamily.Contains(installation.Launcher)) await WriteMmcPackAsync(installation.Launcher, installation.InstancePath, manifest, ct).ConfigureAwait(false);
-        var updated = installation with { ModpackVersion = manifest.Version, ManagedFiles = wanted.ToArray(), WriteOnceFiles = writeOnce.ToArray() };
+        foreach (var stale in stamps.Keys.Where(key => !wanted.Contains(key)).ToArray()) stamps.Remove(stale);
+        var profileHashes = selected.Where(file => PerformanceProfile.IsProfileFile(file.Path)).ToDictionary(file => file.Path, file => file.Sha256, StringComparer.OrdinalIgnoreCase);
+        var updated = installation with { ModpackVersion = manifest.Version, ManagedFiles = wanted.ToArray(), WriteOnceFiles = writeOnce.ToArray(), VerifiedFiles = stamps, ProfilePublishedHashes = profileHashes };
         await SaveInstallationAsync(updated, ct).ConfigureAwait(false);
+        return updatedProfiles;
 
         static bool IsModJar(string relative) => relative.Replace('\\', '/').StartsWith("mods/", StringComparison.OrdinalIgnoreCase)
             && relative.EndsWith(".jar", StringComparison.OrdinalIgnoreCase);
@@ -280,6 +379,14 @@ public sealed class ExternalLauncherManager
         if (registered is null) throw new LauncherException("error.external.instanceExists", "This instance is not registered with DUSMP.");
         var start = CreateMmcStartInfo(registered);
         await StartExternalAsync(start, ct).ConfigureAwait(false);
+    }
+
+    public async Task OpenExistingLauncherAsync(ManagedInstallation installation, CancellationToken ct = default)
+    {
+        var info = Detect().First(x => x.Id == installation.Launcher);
+        var command = info.Command ?? throw new LauncherException("error.external.launchFailed", $"{info.Name} could not be found.");
+        var root = info.Root ?? Path.GetDirectoryName(installation.InstancePath)!;
+        await StartExternalAsync(command.CreateStartInfo(root), ct).ConfigureAwait(false);
     }
 
     private static async Task StartExternalAsync(ProcessStartInfo start, CancellationToken ct)

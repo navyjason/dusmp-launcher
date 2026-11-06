@@ -334,6 +334,7 @@
   width: min(300px, 100%);
   animation: home-rise .42s .06s cubic-bezier(.22, .68, .36, 1) both;
 }
+.optional-mods-home { width: 100%; margin-bottom: 8px; }
 
 .screen-main .btn-play {
   position: relative;

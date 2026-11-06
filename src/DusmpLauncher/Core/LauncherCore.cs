@@ -59,7 +59,7 @@ public sealed class LauncherCore : ILauncherCore
     private readonly ModrinthMetadataResolver? _modMetadata;
     private readonly MinecraftAppearance? _appearance;
     private readonly Accounts.AccountStore _accounts;
-    private readonly ExternalLauncherManager _externalLaunchers;
+    private ExternalLauncherManager _externalLaunchers;
 
     /// <summary>Serialises multi-step operations that must not interleave.</summary>
     private readonly SemaphoreSlim _mutex = new(1, 1);
@@ -78,6 +78,11 @@ public sealed class LauncherCore : ILauncherCore
     /// <summary>The background modpack download, so Play can wait on it instead of restarting it.</summary>
     private Task<DownloadResult>? _backgroundDownload;
     private CancellationTokenSource? _backgroundCts;
+    private readonly object _exitRefreshLock = new();
+    private Task<bool>? _exitRefresh;
+    private int _stopRequested;
+    private readonly object _launchCancellationLock = new();
+    private CancellationTokenSource? _launchCancellation;
 
 
     public LauncherCore(
@@ -138,7 +143,13 @@ public sealed class LauncherCore : ILauncherCore
 
     public GameSettings CurrentSettings => _config.Current.Game;
 
-    public IReadOnlyList<ExternalLauncherInfo> GetExternalLaunchers() => _externalLaunchers.Detect();
+    public IReadOnlyList<ExternalLauncherInfo> GetExternalLaunchers()
+    {
+        var order = new[] { "modrinth", "curseforge", "prism", "multimc", "polymc" };
+        var detected = _externalLaunchers.Detect();
+        return order.Select(id => detected.FirstOrDefault(item => item.Id == id))
+            .Where(item => item is not null).ToArray()!;
+    }
 
     public async Task SetPlayModeAsync(string mode, CancellationToken ct = default)
     {
@@ -156,7 +167,7 @@ public sealed class LauncherCore : ILauncherCore
                 PlayMode = mode,
                 InstancePath = CurrentGameDirectory(),
                 Screen = mode == "external"
-                    ? BridgeProtocol.Screens.OnboardingExternalLauncher
+                    ? _manifest is null && _editions.Count > 0 ? BridgeProtocol.Screens.OnboardingEdition : BridgeProtocol.Screens.OnboardingExternalLauncher
                     : !_config.Current.FirstLaunch && _session is not null ? BridgeProtocol.Screens.Main : BridgeProtocol.Screens.OnboardingAccount,
             });
         }
@@ -168,14 +179,16 @@ public sealed class LauncherCore : ILauncherCore
         // Every launcher DUSMP has an adapter for: the MultiMC family, which
         // takes a real instance, and the official launcher, which takes a
         // profile pointed at a game directory.
-        if (id != "official" && !ExternalLauncherDiscovery.MmcFamily.Contains(id))
+        if (id is not ("official" or "modrinth" or "curseforge") && !ExternalLauncherDiscovery.MmcFamily.Contains(id))
             throw new LauncherException("error.external.adapterUnavailable", id);
         await _installGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (State.GameState != GameRunState.Idle) throw new LauncherException("error.game.running");
             if (_manifest is null) throw new LauncherException("error.manifest.invalid", "Cannot prepare an external instance before the modpack manifest is loaded.");
-            var installation = id == "official"
+            var installation = id is "modrinth" or "curseforge"
+                ? await _externalLaunchers.SelectExistingProfileAsync(id, root ?? "", _manifest, ct).ConfigureAwait(false)
+                : id == "official"
                 ? await _externalLaunchers.CreateOrSelectOfficialAsync(root, _manifest, ct).ConfigureAwait(false)
                 : await _externalLaunchers.CreateOrSelectMmcAsync(id, root, _manifest, ct).ConfigureAwait(false);
             _config.Current.PlayMode = "external";
@@ -339,10 +352,10 @@ public sealed class LauncherCore : ILauncherCore
             Mutate(st => st with
             {
                 Screen = config.FirstLaunch
-                    ? !string.IsNullOrWhiteSpace(config.Language) && !JvmPresets.IsKnown(config.Game.JvmPreset)
+                    ? !string.IsNullOrWhiteSpace(config.Language) && (config.PerformanceProfileRevision < JvmPresets.ProfileRevision || !JvmPresets.IsKnown(config.Game.JvmPreset))
                         ? BridgeProtocol.Screens.OnboardingDevice
                         : BridgeProtocol.Screens.OnboardingLanguage
-                    : !JvmPresets.IsKnown(config.Game.JvmPreset)
+                    : (config.PerformanceProfileRevision < JvmPresets.ProfileRevision || !JvmPresets.IsKnown(config.Game.JvmPreset))
                         ? BridgeProtocol.Screens.OnboardingDevice
                         : BridgeProtocol.Screens.OnboardingEdition,
                 ReadyToPlay = false,
@@ -427,7 +440,9 @@ public sealed class LauncherCore : ILauncherCore
             // A first launch that has already answered the edition step is past
             // the language step, and sending it back there would make the setup
             // start over every time a pack is chosen.
-            Screen = !JvmPresets.IsKnown(config.Game.JvmPreset) ? BridgeProtocol.Screens.OnboardingDevice
+            Screen = (config.PerformanceProfileRevision < JvmPresets.ProfileRevision || !JvmPresets.IsKnown(config.Game.JvmPreset)) ? BridgeProtocol.Screens.OnboardingDevice
+                : config.PlayMode == "external" && string.IsNullOrWhiteSpace(config.ExternalLauncherId) ? BridgeProtocol.Screens.OnboardingExternalLauncher
+                : !config.FirstLaunch && HasUnseenOptionalMods() ? BridgeProtocol.Screens.OnboardingOptionalMods
                 : !config.FirstLaunch ? BridgeProtocol.Screens.Main
                 : string.IsNullOrWhiteSpace(config.Edition) ? BridgeProtocol.Screens.OnboardingLanguage
                 : _remoteOptionalMods.Count > 0 ? BridgeProtocol.Screens.OnboardingOptionalMods
@@ -575,6 +590,8 @@ public sealed class LauncherCore : ILauncherCore
                 token.ThrowIfCancellationRequested();
                 Stage(LauncherStage.Finishing);
                 await _modpack.CommitAsync(plan, token).ConfigureAwait(false);
+                foreach (var changed in plan.ToDownload.Where(file => PerformanceProfile.IsProfileFile(file.File.Path)))
+                    _config.Current.PerformanceProfileApplied?.Remove(Path.GetFullPath(_editionPaths.Instance) + "|" + changed.File.Path.Replace('\\', '/'));
                 _config.Current.InstalledModpackVersion = plan.Manifest.Version;
                 await _config.SaveAsync(token).ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
@@ -707,7 +724,11 @@ public sealed class LauncherCore : ILauncherCore
         await _mutex.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            if (preset is not (JvmPresets.Low8Gb or JvmPresets.Standard or JvmPresets.Smooth))
+                throw new LauncherException("error.device.unknown", preset);
             JvmPresets.Apply(_config.Current.Game, preset);
+            _config.Current.PerformanceProfileRevision = JvmPresets.ProfileRevision;
+            _config.Current.PerformanceProfileGeneration++;
             await _config.SaveAsync(ct).ConfigureAwait(false);
             Mutate(s => s with
             {
@@ -717,6 +738,7 @@ public sealed class LauncherCore : ILauncherCore
                         ? BridgeProtocol.Screens.OnboardingPlayMode
                         : _editions.Count > 0 && string.IsNullOrWhiteSpace(_config.Current.Edition)
                             ? BridgeProtocol.Screens.OnboardingEdition
+                            : HasUnseenOptionalMods() ? BridgeProtocol.Screens.OnboardingOptionalMods
                             : BridgeProtocol.Screens.Main
                     : s.Screen,
             });
@@ -883,13 +905,19 @@ public sealed class LauncherCore : ILauncherCore
         if (_manifest is null)
             throw new LauncherException("error.manifest.invalid", "No manifest loaded.");
 
+        Task<bool>? exitRefresh;
+        lock (_exitRefreshLock) exitRefresh = _exitRefresh is { IsCompleted: false } ? _exitRefresh : null;
+        var refreshedOnExit = exitRefresh is not null && await exitRefresh.WaitAsync(ct).ConfigureAwait(false);
         await _installGate.WaitAsync(ct).ConfigureAwait(false);
         if (_state.GameState is GameRunState.Preparing or GameRunState.Launching or GameRunState.Running)
         {
             _installGate.Release();
             return;
         }
+        Interlocked.Exchange(ref _stopRequested, 0);
         Mutate(s => s with { GameState = GameRunState.Preparing });
+        using var launchCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        lock (_launchCancellationLock) _launchCancellation = launchCancellation;
 
         try
         {
@@ -899,6 +927,15 @@ public sealed class LauncherCore : ILauncherCore
                 var finished = await running.WaitAsync(ct).ConfigureAwait(false);
                 if (!finished.Success)
                     throw new LauncherException(_state.FatalErrorKey ?? "error.download.failed", _state.FatalErrorDetail);
+            }
+
+            if (!refreshedOnExit)
+                await RefreshManifestAsync(ct).ConfigureAwait(false);
+
+            if (!_config.Current.FirstLaunch && HasUnseenOptionalMods())
+            {
+                Mutate(s => s with { GameState = GameRunState.Idle, Screen = BridgeProtocol.Screens.OnboardingOptionalMods });
+                return;
             }
 
             // Re-verify: cheap thanks to the ledger, and the only way to catch a
@@ -925,13 +962,17 @@ public sealed class LauncherCore : ILauncherCore
             if (_config.Current.PlayMode == "external")
             {
                 var hostId = _config.Current.ExternalLauncherId;
-                if (hostId is null || (hostId != "official" && !ExternalLauncherDiscovery.MmcFamily.Contains(hostId))
+                if (hostId is null || (hostId is not ("official" or "modrinth" or "curseforge") && !ExternalLauncherDiscovery.MmcFamily.Contains(hostId))
                     || string.IsNullOrWhiteSpace(_config.Current.ExternalInstancePath))
                     throw new LauncherException("error.external.notConfigured", "Select a supported external launcher first.");
                 var installations = await _externalLaunchers.GetInstallationsAsync(ct).ConfigureAwait(false);
                 var instance = installations.FirstOrDefault(x => x.Managed && x.Launcher == hostId && Path.GetFullPath(x.InstancePath).Equals(Path.GetFullPath(_config.Current.ExternalInstancePath), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
                 if (instance is null) throw new LauncherException("error.external.registrationMissing", _config.Current.ExternalInstancePath);
-                await _externalLaunchers.SyncManagedFilesAsync(instance, _manifest, choices, ct).ConfigureAwait(false);
+                var updatedProfiles = await _externalLaunchers.SyncManagedFilesAsync(instance, _manifest, choices, ct).ConfigureAwait(false);
+                foreach (var relative in updatedProfiles)
+                    _config.Current.PerformanceProfileApplied?.Remove(Path.GetFullPath(CurrentGameDirectory()) + "|" + relative);
+                await InstallUpdateNotifierAsync(_manifest, ct).ConfigureAwait(false);
+                await ApplyPerformanceProfileAsync(ct).ConfigureAwait(false);
 
                 if (hostId == "official")
                 {
@@ -948,6 +989,10 @@ public sealed class LauncherCore : ILauncherCore
                     await _externalLaunchers.WriteOfficialProfileAsync(instance, hostVersion, ct).ConfigureAwait(false);
                     await _externalLaunchers.LaunchOfficialAsync(instance, ct).ConfigureAwait(false);
                 }
+                else if (hostId is "modrinth" or "curseforge")
+                {
+                    await _externalLaunchers.OpenExistingLauncherAsync(instance, ct).ConfigureAwait(false);
+                }
                 else
                 {
                     await _externalLaunchers.LaunchMmcAsync(instance, ct).ConfigureAwait(false);
@@ -961,6 +1006,7 @@ public sealed class LauncherCore : ILauncherCore
                 return;
             }
 
+            await ApplyPerformanceProfileAsync(ct).ConfigureAwait(false);
             var session = _session ?? await RestoreSessionAsync(ct).ConfigureAwait(false);
             var versionId = _preparedVersionId ?? await _game.EnsureLoaderInstalledAsync(_manifest, ReportProgress(), ct).ConfigureAwait(false);
 
@@ -969,16 +1015,23 @@ public sealed class LauncherCore : ILauncherCore
             // build every mod accepts instead, and say so.
             versionId = await EnsureLoaderSatisfiesModsAsync(versionId, ct).ConfigureAwait(false);
 
-            await _game.LaunchAsync(versionId, session, _config.Current.Game, ct).ConfigureAwait(false);
-
             Mutate(s => s with { GameState = GameRunState.Running });
+            await _game.LaunchAsync(versionId, session, _config.Current.Game, launchCancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (Volatile.Read(ref _stopRequested) != 0 && !ct.IsCancellationRequested)
+        {
+            Mutate(s => s with { GameState = GameRunState.Idle });
         }
         catch
         {
             Mutate(s => s with { GameState = GameRunState.Idle });
             throw;
         }
-        finally { _installGate.Release(); }
+        finally
+        {
+            lock (_launchCancellationLock) _launchCancellation = null;
+            _installGate.Release();
+        }
     }
 
     /// <summary>
@@ -1076,10 +1129,11 @@ public sealed class LauncherCore : ILauncherCore
 
     public async Task StopGameAsync(CancellationToken ct = default)
     {
-        await _game.StopAsync(ct).ConfigureAwait(false);
-        // OnGameExited normally moves the state, but a process that was already
-        // gone raises nothing, so settle it here too.
-        Mutate(s => s with { GameState = GameRunState.Idle });
+        Interlocked.Exchange(ref _stopRequested, 1);
+        lock (_launchCancellationLock) _launchCancellation?.Cancel();
+        await _installGate.WaitAsync(ct).ConfigureAwait(false);
+        try { await _game.StopAsync(ct).ConfigureAwait(false); }
+        finally { _installGate.Release(); }
     }
 
     public async Task RepairAsync(CancellationToken ct = default)
@@ -1380,12 +1434,16 @@ public sealed class LauncherCore : ILauncherCore
         if (string.Equals(next.Instance, _editionPaths.Instance, StringComparison.Ordinal)) return;
 
         _editionPaths = next;
+        _remoteOptionalMods = Array.Empty<OptionalMod>();
+        _externalLaunchers = new ExternalLauncherManager(next);
         if (_editionComponents is null) return;
 
         var built = _editionComponents(next);
         _modpack = built.Modpack;
         _manifests = built.Manifests;
+        _game.GameExited -= OnGameExited;
         _game = built.Game;
+        _game.GameExited += OnGameExited;
     }
 
     /// <summary>The packs the player can choose between, and the one in use.</summary>
@@ -1522,9 +1580,50 @@ public sealed class LauncherCore : ILauncherCore
         finally { _mutex.Release(); }
     }
 
+    private async Task ApplyPerformanceProfileAsync(CancellationToken ct)
+    {
+        var config = _config.Current;
+        if (config.Game.JvmPreset == JvmPresets.Smooth) return;
+        var root = Path.GetFullPath(CurrentGameDirectory());
+        config.PerformanceProfileApplied ??= new Dictionary<string, int>();
+        bool changed = false;
+        string Key(string relative) => root + "|" + relative;
+        PerformanceProfile.Apply(root,
+            relative => !config.PerformanceProfileApplied.TryGetValue(Key(relative), out var generation) || generation != config.PerformanceProfileGeneration,
+            relative => { config.PerformanceProfileApplied[Key(relative)] = config.PerformanceProfileGeneration; changed = true; },
+            createBackup: config.PlayMode != "external" || config.ExternalLauncherId is not ("modrinth" or "curseforge"));
+        if (changed) await _config.SaveAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task InstallUpdateNotifierAsync(ModpackManifest manifest, CancellationToken ct)
+    {
+        if (!string.Equals(manifest.Loader, "neoforge", StringComparison.OrdinalIgnoreCase) ||
+            manifest.Minecraft is not ("1.21.1" or "1.21.11") || string.IsNullOrWhiteSpace(_config.Current.Edition))
+            return;
+        var root = CurrentGameDirectory();
+        var jar = Path.Combine(root, "mods", "dusmp-update-notifier.jar");
+        if (File.Exists(jar + ".disabled")) return;
+        Directory.CreateDirectory(Path.GetDirectoryName(jar)!);
+        var resource = $"DusmpLauncher.Resources.UpdateNotifier.{manifest.Minecraft}.jar";
+        await using var input = typeof(LauncherCore).Assembly.GetManifestResourceStream(resource)
+            ?? throw new InvalidOperationException($"Missing update notifier for Minecraft {manifest.Minecraft}.");
+        var temp = jar + ".tmp";
+        try
+        {
+            await using (var output = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
+                await input.CopyToAsync(output, ct).ConfigureAwait(false);
+            File.Move(temp, jar, true);
+        }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
+        var configPath = Path.Combine(root, "config", "dusmp-update-notifier.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        var json = System.Text.Json.JsonSerializer.Serialize(new { edition = _config.Current.Edition, version = manifest.Version });
+        await File.WriteAllTextAsync(configPath, json, ct).ConfigureAwait(false);
+    }
+
     private void RequireDevicePresetForSetup()
     {
-        if (JvmPresets.IsKnown(_config.Current.Game.JvmPreset)) return;
+        if (_config.Current.PerformanceProfileRevision >= JvmPresets.ProfileRevision && JvmPresets.IsKnown(_config.Current.Game.JvmPreset)) return;
         Mutate(s => s with { Screen = BridgeProtocol.Screens.OnboardingDevice });
         throw new LauncherException("error.device.required");
     }
@@ -1532,7 +1631,7 @@ public sealed class LauncherCore : ILauncherCore
     public string? ValidateOfflineUsername(string username) => _offline.ValidateUsername(username);
 
     private string CurrentGameDirectory() => _config.Current.PlayMode == "external" && _config.Current.ExternalInstancePath is { Length: > 0 } externalPath
-        ? _config.Current.ExternalLauncherId == "prism" ? Path.Combine(externalPath, ".minecraft") : externalPath
+        ? ExternalLauncherDiscovery.MmcFamily.Contains(_config.Current.ExternalLauncherId) ? Path.Combine(externalPath, ".minecraft") : externalPath
         : _editionPaths.Instance;
 
     public void OpenInstanceFolder()
@@ -1629,6 +1728,8 @@ public sealed class LauncherCore : ILauncherCore
         Mutate(s => s with { OptionalMods = views });
     }
 
+    private bool HasUnseenOptionalMods() => _optionalMods.Merge(_remoteOptionalMods).Any(mod => mod.IsNew);
+
     private void OnDownloadStats(DownloadStats stats)
     {
         PublishProgress(new ProgressSnapshot
@@ -1648,10 +1749,82 @@ public sealed class LauncherCore : ILauncherCore
 
     private void OnGameExited(int exitCode)
     {
+        var stopped = Interlocked.Exchange(ref _stopRequested, 0) != 0;
+        var edition = _config.Current.Edition;
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_exitRefreshLock) _exitRefresh = ready.Task;
         Mutate(s => s with
         {
-            GameState = exitCode == 0 ? GameRunState.Idle : GameRunState.Crashed,
+            GameState = exitCode == 0 || stopped ? GameRunState.Idle : GameRunState.Crashed,
         });
+        _ = RefreshAfterExitAsync(edition, ready);
+    }
+
+    // The caller holds _installGate and has joined any previous download.
+    private async Task<bool> RefreshManifestAsync(CancellationToken ct)
+    {
+        var latest = await TryApi(() => _api.GetModpackLatestAsync(_config.Current.Edition, ct)).ConfigureAwait(false);
+        if (latest is null || string.IsNullOrWhiteSpace(latest.Version)) return false;
+        Mutate(s => s with { LatestVersion = latest.Version });
+        if (_manifest is not null && string.Equals(_manifest.Version, latest.Version, StringComparison.Ordinal))
+        {
+            var currentOptional = await TryApi(() => _api.GetOptionalModsAsync(_manifest.Version, ct)).ConfigureAwait(false);
+            if (currentOptional is not null) { _remoteOptionalMods = currentOptional; RefreshOptionalModState(); PromptForNewOptionalMods(); }
+            return currentOptional is not null && HasUnseenOptionalMods();
+        }
+
+        // Once the service announces a new version, do not launch a stale pack
+        // when fetching or validating that version fails.
+        var manifest = await _api.GetModpackManifestAsync(latest.Version, ct).ConfigureAwait(false);
+        _manifests.Validate(manifest);
+        if (!string.Equals(manifest.Version, latest.Version, StringComparison.Ordinal))
+            throw new LauncherException("error.manifest.invalid", "Manifest version does not match the latest version.");
+        var optional = await TryApi(() => _api.GetOptionalModsAsync(manifest.Version, ct)).ConfigureAwait(false);
+        await _manifests.SaveCacheAsync(manifest, ct).ConfigureAwait(false);
+        _manifest = manifest;
+        _preparedVersionId = null;
+        if (optional is not null) _remoteOptionalMods = optional;
+        RefreshOptionalModState();
+        PromptForNewOptionalMods();
+        Mutate(s => s with { MinecraftVersion = manifest.Minecraft });
+        return true;
+    }
+
+    private void PromptForNewOptionalMods()
+    {
+        if (!_config.Current.FirstLaunch && HasUnseenOptionalMods() &&
+            State.GameState is not (GameRunState.Preparing or GameRunState.Launching or GameRunState.Running))
+            Mutate(s => s with { Screen = BridgeProtocol.Screens.OnboardingOptionalMods });
+    }
+
+    private async Task RefreshAfterExitAsync(string? edition, TaskCompletionSource<bool> completion)
+    {
+        var refreshed = false;
+        try
+        {
+            await _installGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (!string.Equals(edition, _config.Current.Edition, StringComparison.Ordinal) ||
+                    _state.GameState is GameRunState.Preparing or GameRunState.Launching or GameRunState.Running)
+                    return;
+                if (_backgroundDownload is { } running) await running.ConfigureAwait(false);
+                await ApplyPerformanceProfileAsync(CancellationToken.None).ConfigureAwait(false);
+                if (await RefreshManifestAsync(CancellationToken.None).ConfigureAwait(false))
+                {
+                    await StopBackgroundWorkAsync().ConfigureAwait(false);
+                    await PlanBackgroundWorkAsync(false, CancellationToken.None).ConfigureAwait(false);
+                    await _backgroundDownload!.ConfigureAwait(false);
+                }
+                refreshed = true;
+            }
+            finally { _installGate.Release(); }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"post-game update check failed: {ex.Message}");
+        }
+        finally { completion.TrySetResult(refreshed); }
     }
 
     private sealed class InlineProgress(Action<ProgressSnapshot> report) : IProgress<ProgressSnapshot>

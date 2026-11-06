@@ -6,3 +6,5 @@ dist/
 .vs/
 .idea/
 .uipreview/
+mods/dusmp-update-notifier/*/.gradle/
+mods/dusmp-update-notifier/*/build/

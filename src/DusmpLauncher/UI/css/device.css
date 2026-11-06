@@ -2,7 +2,7 @@
 .device-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .device-choice {
   display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
-  min-height: 230px; padding: 24px; text-align: start; color: #f7f7f5;
+  min-height: 115px; padding: 12px; text-align: start; color: #f7f7f5;
   background: #ffffff08; border: 1px solid var(--line); border-radius: 13px;
   cursor: pointer; transition: border-color .12s, background .12s;
 }
@@ -12,7 +12,7 @@
 .device-choice:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
 .device-choice:disabled { cursor: wait; opacity: .65; }
 .device-choice-tier { color: var(--muted); font-size: 12px; }
-.device-choice-title { font-size: 25px; font-weight: 700; letter-spacing: -.03em; }
+.device-choice-title { font-size: 19px; font-weight: 700; letter-spacing: -.03em; }
 .device-choice-memory { color: var(--gold); font-size: 16px; font-weight: 650; }
 .device-choice-description { margin-top: 5px; color: var(--muted); font-size: 13px; line-height: 1.55; }
 .device-memory-hint { margin: 18px 0 0; }

@@ -359,7 +359,7 @@ public sealed class GameLauncher : IGameLauncher, IDisposable
             FullScreen = settings.Fullscreen,
             GameLauncherName = LauncherBrand,
             GameLauncherVersion = LauncherVersion,
-            ExtraJvmArguments = ParseJvmArguments(settings),
+            ExtraJvmArguments = ParseJvmArguments(settings, JavaProvisioner.RequiredMajorVersion(version) == 21),
         };
 
         // --width/--height alongside fullscreen only confuses the game, so the
@@ -388,7 +388,6 @@ public sealed class GameLauncher : IGameLauncher, IDisposable
         process.StartInfo.RedirectStandardOutput = true;
         process.StartInfo.RedirectStandardError = true;
         process.StartInfo.CreateNoWindow = true;
-        process.EnableRaisingEvents = true;
 
         process.OutputDataReceived += OnOutputDataReceived;
         process.ErrorDataReceived += OnErrorDataReceived;
@@ -413,6 +412,9 @@ public sealed class GameLauncher : IGameLauncher, IDisposable
         _process = process;
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
+        // Arm exit notification only once the tracked process and its readers
+        // are ready. Process raises Exited even if it ended before this point.
+        process.EnableRaisingEvents = true;
 
         return process;
     }
@@ -711,11 +713,11 @@ public sealed class GameLauncher : IGameLauncher, IDisposable
     /// Keeps quoted custom values together, then applies the selected preset's
     /// collector policy without overriding the adjustable memory controls.
     /// </summary>
-    private static IEnumerable<MArgument> ParseJvmArguments(GameSettings settings)
+    private static IEnumerable<MArgument> ParseJvmArguments(GameSettings settings, bool useLowMemoryTuning)
     {
         try
         {
-            return JvmPresets.BuildArguments(settings)
+            return JvmPresets.BuildArguments(settings, useLowMemoryTuning)
                 .Select(token => new MArgument(token))
                 .ToArray();
         }

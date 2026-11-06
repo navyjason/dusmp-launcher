@@ -1,11 +1,13 @@
 param(
-  [string]$OutputPath = (Join-Path $PSScriptRoot '..\..\dist\win\DUSMP-Launcher-Setup.exe')
+  [string]$OutputPath = (Join-Path $PSScriptRoot '..\..\dist\win\DUSMP-Launcher-Setup.exe'),
+  [string]$LauncherDir = '',
+  [string]$UpdaterDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$launcherDir = Join-Path $repoRoot 'dist\win\launcher'
-$updaterDir = Join-Path $repoRoot 'dist\win\updater'
+if (-not $LauncherDir) { $LauncherDir = Join-Path $repoRoot 'dist\win\launcher' }
+if (-not $UpdaterDir) { $UpdaterDir = Join-Path $repoRoot 'dist\win\updater' }
 foreach ($requiredFile in @((Join-Path $launcherDir 'DusmpLauncher.exe'), (Join-Path $updaterDir 'DusmpUpdater.exe'))) {
   if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
     throw "Missing publish output: $requiredFile. Publish the Windows launcher and updater first."

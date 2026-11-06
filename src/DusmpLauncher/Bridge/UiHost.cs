@@ -77,6 +77,16 @@ public sealed class UiHost
                 var folders = await _window!.ShowOpenFolderAsync(_languages.Translate("app.chooseDataFolder"), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), true).ConfigureAwait(false);
                 return folders?.FirstOrDefault();
             },
+            chooseExternalProfile: async id =>
+            {
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var start = id == "modrinth"
+                    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ModrinthApp", "profiles")
+                    : Path.Combine(home, "curseforge", "minecraft", "Instances");
+                if (!Directory.Exists(start)) start = home;
+                var folders = await _window!.ShowOpenFolderAsync("Choose an existing DUSMP profile", start, true).ConfigureAwait(false);
+                return folders?.FirstOrDefault();
+            },
             choosePng: async () =>
             {
                 // Filtered to PNG because a skin is always one, and the API's
