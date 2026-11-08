@@ -81,6 +81,7 @@ public sealed class LauncherCore : ILauncherCore
     private readonly object _exitRefreshLock = new();
     private Task<bool>? _exitRefresh;
     private int _stopRequested;
+    private int _manualSyncAfterOptional;
     private readonly object _launchCancellationLock = new();
     private CancellationTokenSource? _launchCancellation;
 
@@ -884,6 +885,8 @@ public sealed class LauncherCore : ILauncherCore
         {
             _mutex.Release();
         }
+        if (Interlocked.Exchange(ref _manualSyncAfterOptional, 0) != 0)
+            await SyncNowAsync(ct).ConfigureAwait(false);
     }
 
     private void EnsureShortcuts()
@@ -945,7 +948,8 @@ public sealed class LauncherCore : ILauncherCore
                 .BuildPlanAsync(_manifest, choices, force: false, ReportProgress(), ct)
                 .ConfigureAwait(false);
 
-            if (!plan.IsComplete || _config.Current.PlayMode != "external" && _preparedVersionId is null)
+            if (!plan.IsComplete || _config.Current.PlayMode != "external" && _preparedVersionId is null ||
+                !string.Equals(_config.Current.InstalledModpackVersion, _manifest.Version, StringComparison.Ordinal))
             {
                 StartBackgroundWork(plan, ct);
                 var result = await _backgroundDownload!.ConfigureAwait(false);
@@ -971,7 +975,7 @@ public sealed class LauncherCore : ILauncherCore
                 var updatedProfiles = await _externalLaunchers.SyncManagedFilesAsync(instance, _manifest, choices, ct).ConfigureAwait(false);
                 foreach (var relative in updatedProfiles)
                     _config.Current.PerformanceProfileApplied?.Remove(Path.GetFullPath(CurrentGameDirectory()) + "|" + relative);
-                await InstallUpdateNotifierAsync(_manifest, ct).ConfigureAwait(false);
+                await UpdateNotifierInstaller.InstallAsync(CurrentGameDirectory(), _manifest, _config.Current.Edition, ct).ConfigureAwait(false);
                 await ApplyPerformanceProfileAsync(ct).ConfigureAwait(false);
 
                 if (hostId == "official")
@@ -1134,6 +1138,83 @@ public sealed class LauncherCore : ILauncherCore
         await _installGate.WaitAsync(ct).ConfigureAwait(false);
         try { await _game.StopAsync(ct).ConfigureAwait(false); }
         finally { _installGate.Release(); }
+    }
+
+    public async Task<bool> SyncNowAsync(CancellationToken ct = default)
+    {
+        RequireLauncherUpdateReady();
+        RequireDevicePresetForSetup();
+        await _installGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (State.GameState is GameRunState.Preparing or GameRunState.Launching or GameRunState.Running)
+                throw new LauncherException("error.game.running");
+            if (IsAnyJavaRunning())
+                throw new LauncherException("error.game.running", "Close Minecraft and other Java applications before syncing.");
+            if (_backgroundDownload is { } running && !(await running.WaitAsync(ct).ConfigureAwait(false)).Success)
+                throw new LauncherException(_state.FatalErrorKey ?? "error.download.failed", _state.FatalErrorDetail);
+            var latest = await _api.GetModpackLatestAsync(_config.Current.Edition, ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(latest.Version)) throw new LauncherException("error.manifest.invalid", "The latest version is missing.");
+            await RefreshManifestAsync(ct, latest).ConfigureAwait(false);
+            if (HasUnseenOptionalMods())
+            {
+                Interlocked.Exchange(ref _manualSyncAfterOptional, 1);
+                Mutate(s => s with { Screen = BridgeProtocol.Screens.OnboardingOptionalMods });
+                return false;
+            }
+            if (_manifest is null) throw new LauncherException("error.manifest.invalid", "No manifest loaded.");
+            var choices = _optionalMods.CurrentChoices(_remoteOptionalMods);
+            Stage(LauncherStage.VerifyingFiles);
+            var plan = await _modpack.BuildPlanAsync(_manifest, choices, false, ReportProgress(), ct).ConfigureAwait(false);
+            if (IsAnyJavaRunning())
+                throw new LauncherException("error.game.running", "Close Minecraft and other Java applications before syncing.");
+            if (!plan.IsComplete || _config.Current.PlayMode != "external" && _preparedVersionId is null ||
+                !string.Equals(_config.Current.InstalledModpackVersion, _manifest.Version, StringComparison.Ordinal))
+            {
+                await StopBackgroundWorkAsync().ConfigureAwait(false);
+                StartBackgroundWork(plan, ct);
+                var result = await _backgroundDownload!.ConfigureAwait(false);
+                if (!result.Success) throw new LauncherException("error.download.failed", result.Failed.FirstOrDefault()?.Detail ?? "Sync was cancelled.");
+            }
+            if (_config.Current.PlayMode == "external")
+            {
+                if (IsAnyJavaRunning()) throw new LauncherException("error.game.running", "Close Minecraft before syncing the external profile.");
+                var id = _config.Current.ExternalLauncherId;
+                var path = _config.Current.ExternalInstancePath;
+                var instance = (await _externalLaunchers.GetInstallationsAsync(ct).ConfigureAwait(false))
+                    .FirstOrDefault(x => x.Managed && x.Launcher == id && path is not null && Path.GetFullPath(x.InstancePath).Equals(Path.GetFullPath(path), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+                if (instance is null) throw new LauncherException("error.external.registrationMissing", path);
+                var updated = await _externalLaunchers.SyncManagedFilesAsync(instance, _manifest, choices, ct).ConfigureAwait(false);
+                foreach (var relative in updated) _config.Current.PerformanceProfileApplied?.Remove(Path.GetFullPath(CurrentGameDirectory()) + "|" + relative);
+                await UpdateNotifierInstaller.InstallAsync(CurrentGameDirectory(), _manifest, _config.Current.Edition, ct).ConfigureAwait(false);
+                await ApplyPerformanceProfileAsync(ct).ConfigureAwait(false);
+                if (id == "official")
+                {
+                    var host = instance.LauncherRoot ?? Path.GetDirectoryName(instance.InstancePath)!;
+                    var version = await _game.EnsureLoaderInstalledInAsync(host, _manifest, ReportProgress(), ct).ConfigureAwait(false);
+                    await _externalLaunchers.WriteOfficialProfileAsync(instance, version, ct).ConfigureAwait(false);
+                }
+            }
+            Stage(LauncherStage.Ready);
+            return true;
+        }
+        catch
+        {
+            if (State.ReadyToPlay) Stage(LauncherStage.Ready);
+            throw;
+        }
+        finally { _installGate.Release(); }
+    }
+
+    private static bool IsAnyJavaRunning()
+    {
+        foreach (var name in new[] { "java", "javaw" })
+        {
+            var processes = Process.GetProcessesByName(name);
+            try { if (processes.Length > 0) return true; }
+            finally { foreach (var process in processes) process.Dispose(); }
+        }
+        return false;
     }
 
     public async Task RepairAsync(CancellationToken ct = default)
@@ -1595,32 +1676,6 @@ public sealed class LauncherCore : ILauncherCore
         if (changed) await _config.SaveAsync(ct).ConfigureAwait(false);
     }
 
-    private async Task InstallUpdateNotifierAsync(ModpackManifest manifest, CancellationToken ct)
-    {
-        if (!string.Equals(manifest.Loader, "neoforge", StringComparison.OrdinalIgnoreCase) ||
-            manifest.Minecraft is not ("1.21.1" or "1.21.11") || string.IsNullOrWhiteSpace(_config.Current.Edition))
-            return;
-        var root = CurrentGameDirectory();
-        var jar = Path.Combine(root, "mods", "dusmp-update-notifier.jar");
-        if (File.Exists(jar + ".disabled")) return;
-        Directory.CreateDirectory(Path.GetDirectoryName(jar)!);
-        var resource = $"DusmpLauncher.Resources.UpdateNotifier.{manifest.Minecraft}.jar";
-        await using var input = typeof(LauncherCore).Assembly.GetManifestResourceStream(resource)
-            ?? throw new InvalidOperationException($"Missing update notifier for Minecraft {manifest.Minecraft}.");
-        var temp = jar + ".tmp";
-        try
-        {
-            await using (var output = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
-                await input.CopyToAsync(output, ct).ConfigureAwait(false);
-            File.Move(temp, jar, true);
-        }
-        finally { if (File.Exists(temp)) File.Delete(temp); }
-        var configPath = Path.Combine(root, "config", "dusmp-update-notifier.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
-        var json = System.Text.Json.JsonSerializer.Serialize(new { edition = _config.Current.Edition, version = manifest.Version });
-        await File.WriteAllTextAsync(configPath, json, ct).ConfigureAwait(false);
-    }
-
     private void RequireDevicePresetForSetup()
     {
         if (_config.Current.PerformanceProfileRevision >= JvmPresets.ProfileRevision && JvmPresets.IsKnown(_config.Current.Game.JvmPreset)) return;
@@ -1761,9 +1816,9 @@ public sealed class LauncherCore : ILauncherCore
     }
 
     // The caller holds _installGate and has joined any previous download.
-    private async Task<bool> RefreshManifestAsync(CancellationToken ct)
+    private async Task<bool> RefreshManifestAsync(CancellationToken ct, ModpackLatestInfo? latest = null)
     {
-        var latest = await TryApi(() => _api.GetModpackLatestAsync(_config.Current.Edition, ct)).ConfigureAwait(false);
+        latest ??= await TryApi(() => _api.GetModpackLatestAsync(_config.Current.Edition, ct)).ConfigureAwait(false);
         if (latest is null || string.IsNullOrWhiteSpace(latest.Version)) return false;
         Mutate(s => s with { LatestVersion = latest.Version });
         if (_manifest is not null && string.Equals(_manifest.Version, latest.Version, StringComparison.Ordinal))
@@ -1779,6 +1834,8 @@ public sealed class LauncherCore : ILauncherCore
         _manifests.Validate(manifest);
         if (!string.Equals(manifest.Version, latest.Version, StringComparison.Ordinal))
             throw new LauncherException("error.manifest.invalid", "Manifest version does not match the latest version.");
+        if (!string.IsNullOrWhiteSpace(_config.Current.Edition) && !string.IsNullOrWhiteSpace(manifest.Edition) && !string.Equals(manifest.Edition, _config.Current.Edition, StringComparison.OrdinalIgnoreCase))
+            throw new LauncherException("error.manifest.invalid", "Manifest belongs to a different edition.");
         var optional = await TryApi(() => _api.GetOptionalModsAsync(manifest.Version, ct)).ConfigureAwait(false);
         await _manifests.SaveCacheAsync(manifest, ct).ConfigureAwait(false);
         _manifest = manifest;

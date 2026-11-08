@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "Przekroczono limit czasu aktualizacji. Spróbuj ponownie, aby wznowić.",
   "error.launcher.updateIntegrity": "Pobrana aktualizacja jest niekompletna lub uszkodzona. Nic nie zainstalowano.",
   "error.launcher.updateSpace": "Za mało wolnego miejsca, aby bezpiecznie zainstalować aktualizację.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "Synchronizuj modpack",
+  "main.syncing": "Synchronizowanie modpacka",
+  "main.syncComplete": "Modpack zsynchronizowany."
 }

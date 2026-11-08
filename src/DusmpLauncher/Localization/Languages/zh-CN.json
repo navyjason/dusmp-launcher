@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "更新超时。请重试以继续。",
   "error.launcher.updateIntegrity": "下载的更新不完整或已损坏。未安装任何内容。",
   "error.launcher.updateSpace": "可用空间不足，无法安全安装更新。",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "同步整合包",
+  "main.syncing": "正在同步整合包",
+  "main.syncComplete": "整合包同步完成。"
 }

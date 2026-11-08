@@ -9,6 +9,7 @@
   let authPromise = null, authCancelPromise = null, authGeneration = 0;
   let progressFrame = null, latestProgress = null, validationSequence = 0;
   let settingsJvmPreset = null, settingsMinRamMb = 512;
+  let syncBusy = false;
   let installedMods = [], installedModSwitches = [], installedModsLoading = false, installedModsMutating = false;
   let installedModsReturn = 'main', installedModsError = '', installedModsRequest = 0;
   const $ = id => document.getElementById(id);
@@ -22,7 +23,7 @@
     return new Promise((resolve, reject) => {
       const id = String(++nextId);
       // Sign-in and installation commands can remain open while the user works.
-      const timer = setTimeout(() => { if (pending.delete(id)) reject(Object.assign(Error(t('error.bridge.timeout')), { key: 'error.bridge.timeout' })); }, ['loginMicrosoft', 'startGame', 'repairInstallation', 'resetInstallation', 'selectEdition', 'importMods'].includes(command) ? 960000 : 120000);
+      const timer = setTimeout(() => { if (pending.delete(id)) reject(Object.assign(Error(t('error.bridge.timeout')), { key: 'error.bridge.timeout' })); }, ['loginMicrosoft', 'startGame', 'repairInstallation', 'resetInstallation', 'selectEdition', 'importMods', 'syncNow', 'finishOnboarding'].includes(command) ? 960000 : 120000);
       pending.set(id, { resolve, reject, timer });
       window.external.sendMessage(JSON.stringify({ id, command, payload }));
     });
@@ -120,6 +121,8 @@
     $('maintenance-banner').hidden = !state.status?.maintenance;
     text('maintenance-text', localized(state.status?.message));
     const running = ['preparing', 'launching', 'running'].includes(state.gameState);
+    $('btn-sync').disabled = syncBusy || running || !state.readyToPlay;
+    $('btn-sync').title = t(syncBusy ? 'main.syncing' : 'main.sync');
     $('btn-optional-mods').disabled = running;
     const live = !external && (state.gameState === 'running' || state.gameState === 'launching');
     const play = $('btn-play');
@@ -812,6 +815,13 @@
   bind('btn-cancel-device', () => cancelMicrosoftLogin());
   bind('mods-continue', async () => { if (editingSettings) return screen('settings'); await send('finishOnboarding'); await refreshState(); });
   bind('btn-optional-mods', () => { editingSettings = false; screen('onboarding-optional-mods'); });
+  bind('btn-sync', async () => {
+    if (syncBusy) return;
+    syncBusy = true; renderState(state);
+    try { const result = await send('syncNow'); await refreshState(); if (result?.completed) toast(t('main.syncComplete')); }
+    catch (e) { showError(e); }
+    finally { syncBusy = false; renderState(state); }
+  });
   bind('btn-play', async () => {
     const play = $('btn-play');
     if (play.dataset.action === 'stop') {

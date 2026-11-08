@@ -151,6 +151,9 @@ public sealed class WebBridge
                 return new { code };
             }
 
+            case BridgeProtocol.Commands.SyncNow:
+                return new { completed = await _core.SyncNowAsync().ConfigureAwait(false) };
+
             case BridgeProtocol.Commands.SetPlayMode:
                 await _core.SetPlayModeAsync(RequireString(request, "mode")).ConfigureAwait(false);
                 return null;

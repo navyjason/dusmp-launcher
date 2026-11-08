@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "Vypršel časový limit aktualizace. Zkuste to znovu a pokračujte.",
   "error.launcher.updateIntegrity": "Stažená aktualizace je neúplná nebo poškozená. Nic nebylo nainstalováno.",
   "error.launcher.updateSpace": "Pro bezpečnou instalaci aktualizace není dostatek volného místa.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "Synchronizovat modpack",
+  "main.syncing": "Synchronizace modpacku",
+  "main.syncComplete": "Modpack synchronizován."
 }

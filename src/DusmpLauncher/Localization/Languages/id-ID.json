@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "Waktu pembaruan habis. Coba lagi untuk melanjutkan.",
   "error.launcher.updateIntegrity": "Pembaruan yang diunduh tidak lengkap atau rusak. Tidak ada yang dipasang.",
   "error.launcher.updateSpace": "Ruang kosong tidak cukup untuk memasang pembaruan dengan aman.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "Sinkronkan modpack",
+  "main.syncing": "Menyinkronkan modpack",
+  "main.syncComplete": "Modpack tersinkron."
 }

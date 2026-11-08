@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "O tempo limite da atualização foi excedido. Tente novamente para retomar.",
   "error.launcher.updateIntegrity": "A atualização baixada está incompleta ou corrompida. Nada foi instalado.",
   "error.launcher.updateSpace": "Não há espaço livre suficiente para instalar a atualização com segurança.",
-  "error.modpack.configConflict": "Uma atualização alterou um arquivo de configuração que você modificou. Mova ou remova o arquivo indicado nos detalhes técnicos e tente novamente."
+  "error.modpack.configConflict": "Uma atualização alterou um arquivo de configuração que você modificou. Mova ou remova o arquivo indicado nos detalhes técnicos e tente novamente.",
+  "main.sync": "Sincronizar modpack",
+  "main.syncing": "Sincronizando modpack",
+  "main.syncComplete": "Modpack sincronizado."
 }

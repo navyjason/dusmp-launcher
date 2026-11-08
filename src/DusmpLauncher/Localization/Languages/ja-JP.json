@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "更新がタイムアウトしました。再試行すると再開します。",
   "error.launcher.updateIntegrity": "ダウンロードした更新が不完全または破損しています。何もインストールされていません。",
   "error.launcher.updateSpace": "更新を安全にインストールするための空き容量が不足しています。",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "モッドパックを同期",
+  "main.syncing": "モッドパックを同期中",
+  "main.syncComplete": "同期が完了しました。"
 }

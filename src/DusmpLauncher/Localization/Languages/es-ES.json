@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "Se agotó el tiempo de espera de la actualización. Inténtalo de nuevo para reanudarla.",
   "error.launcher.updateIntegrity": "La actualización descargada está incompleta o dañada. No se instaló nada.",
   "error.launcher.updateSpace": "No hay suficiente espacio libre para instalar la actualización de forma segura.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "Sincronizar modpack",
+  "main.syncing": "Sincronizando modpack",
+  "main.syncComplete": "Modpack sincronizado."
 }

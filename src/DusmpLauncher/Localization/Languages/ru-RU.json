@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "Время ожидания обновления истекло. Повторите попытку, чтобы продолжить.",
   "error.launcher.updateIntegrity": "Загруженное обновление неполное или повреждено. Ничего не установлено.",
   "error.launcher.updateSpace": "Недостаточно свободного места для безопасной установки обновления.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "Синхронизировать сборку",
+  "main.syncing": "Синхронизация сборки",
+  "main.syncComplete": "Сборка синхронизирована."
 }

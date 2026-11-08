@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "Il tempo di attesa per l’aggiornamento è scaduto. Riprova per riprendere.",
   "error.launcher.updateIntegrity": "L’aggiornamento scaricato è incompleto o danneggiato. Non è stato installato nulla.",
   "error.launcher.updateSpace": "Lo spazio libero non è sufficiente per installare l’aggiornamento in sicurezza.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "Sincronizza modpack",
+  "main.syncing": "Sincronizzazione modpack",
+  "main.syncComplete": "Modpack sincronizzato."
 }

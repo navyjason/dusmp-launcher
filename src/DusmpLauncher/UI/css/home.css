@@ -464,6 +464,10 @@
 
 /* Right-aligned block, so the rows read inwards from that edge. */
 .home-meta > div { justify-content: end; }
+.version-sync{display:inline-grid;place-items:center;width:26px;height:26px;padding:4px;border:1px solid #ffffff30;border-radius:7px;background:#0b0d10b8;color:#e3e6e9;cursor:pointer;flex:none;align-self:center}
+.version-sync svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.version-sync:hover:not(:disabled){color:var(--gold);border-color:var(--gold)}
+.version-sync:disabled{opacity:.45;cursor:default}
 
 .home-meta > div {
   display: flex;

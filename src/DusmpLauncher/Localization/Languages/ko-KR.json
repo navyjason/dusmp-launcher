@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "업데이트 시간이 초과되었습니다. 다시 시도하면 이어서 진행합니다.",
   "error.launcher.updateIntegrity": "다운로드한 업데이트가 불완전하거나 손상되었습니다. 아무것도 설치되지 않았습니다.",
   "error.launcher.updateSpace": "업데이트를 안전하게 설치할 여유 공간이 부족합니다.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "모드팩 동기화",
+  "main.syncing": "모드팩 동기화 중",
+  "main.syncComplete": "동기화가 완료되었습니다."
 }

@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "De wachttijd voor de update is verstreken. Probeer het opnieuw om te hervatten.",
   "error.launcher.updateIntegrity": "De gedownloade update is onvolledig of beschadigd. Er is niets geïnstalleerd.",
   "error.launcher.updateSpace": "Er is onvoldoende vrije ruimte om de update veilig te installeren.",
-  "error.modpack.configConflict": "Een packupdate heeft een aangepast configuratiebestand gewijzigd. Verplaats of verwijder het bestand bij de technische details en probeer opnieuw."
+  "error.modpack.configConflict": "Een packupdate heeft een aangepast configuratiebestand gewijzigd. Verplaats of verwijder het bestand bij de technische details en probeer opnieuw.",
+  "main.sync": "Modpack synchroniseren",
+  "main.syncing": "Modpack synchroniseren",
+  "main.syncComplete": "Modpack is gesynchroniseerd."
 }

@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "Le délai de mise à jour est dépassé. Réessayez pour reprendre.",
   "error.launcher.updateIntegrity": "La mise à jour téléchargée est incomplète ou corrompue. Rien n’a été installé.",
   "error.launcher.updateSpace": "L’espace libre est insuffisant pour installer la mise à jour en toute sécurité.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "Synchroniser le modpack",
+  "main.syncing": "Synchronisation du modpack",
+  "main.syncComplete": "Modpack synchronisé."
 }

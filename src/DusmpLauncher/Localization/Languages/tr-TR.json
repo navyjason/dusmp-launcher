@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "Güncelleme zaman aşımına uğradı. Devam etmek için tekrar deneyin.",
   "error.launcher.updateIntegrity": "İndirilen güncelleme eksik veya bozuk. Hiçbir şey yüklenmedi.",
   "error.launcher.updateSpace": "Güncellemeyi güvenle yüklemek için yeterli boş alan yok.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "Mod paketini eşitle",
+  "main.syncing": "Mod paketi eşitleniyor",
+  "main.syncComplete": "Mod paketi eşitlendi."
 }

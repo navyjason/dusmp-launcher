@@ -56,6 +56,7 @@ public interface ILauncherCore
 
     /// <summary>Stops the running game, so Play can double as a Stop button.</summary>
     Task StopGameAsync(CancellationToken ct = default);
+    Task<bool> SyncNowAsync(CancellationToken ct = default);
 
     /// <summary>Full rehash and repair of the installation.</summary>
     Task RepairAsync(CancellationToken ct = default);

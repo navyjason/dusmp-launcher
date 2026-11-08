@@ -21,6 +21,7 @@ public sealed record ManagedInstallation(string Id, string Launcher, string Plat
 {
     public IReadOnlyList<string> WriteOnceFiles { get; init; } = Array.Empty<string>();
     public string? LauncherRoot { get; init; }
+    public string? Edition { get; init; }
     public Dictionary<string, ExternalFileStamp> VerifiedFiles { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> ProfilePublishedHashes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }
@@ -54,7 +55,7 @@ public sealed class ExternalLauncherManager
         var prior = records.FirstOrDefault(x => x.Managed && x.Launcher == launcherId && Path.GetFullPath(x.InstancePath).Equals(target, PathComparison));
         var id = prior?.Id ?? "dusmp-" + launcherId + "-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target)))[..12].ToLowerInvariant();
         var installation = new ManagedInstallation(id, launcherId, RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "windows" : "linux", target, true, prior?.ModpackVersion ?? manifest.Version, prior?.RegisteredAt ?? DateTimeOffset.UtcNow, prior?.ManagedFiles ?? Array.Empty<string>())
-        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), VerifiedFiles = prior?.VerifiedFiles ?? new(StringComparer.OrdinalIgnoreCase), ProfilePublishedHashes = prior?.ProfilePublishedHashes ?? new(StringComparer.OrdinalIgnoreCase), LauncherRoot = Detect().First(x => x.Id == launcherId).Root };
+        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), VerifiedFiles = prior?.VerifiedFiles ?? new(StringComparer.OrdinalIgnoreCase), ProfilePublishedHashes = prior?.ProfilePublishedHashes ?? new(StringComparer.OrdinalIgnoreCase), LauncherRoot = Detect().First(x => x.Id == launcherId).Root, Edition = _paths.Edition };
         await SaveInstallationAsync(installation, ct).ConfigureAwait(false);
         return installation;
     }
@@ -97,7 +98,7 @@ public sealed class ExternalLauncherManager
         await WriteMmcPackAsync(launcherId, target, manifest, ct).ConfigureAwait(false);
         var id = prior?.Id ?? $"dusmp-{launcherId}-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(target))))[..12].ToLowerInvariant();
         var installation = new ManagedInstallation(id, launcherId, RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "windows" : "linux", target, true, prior?.ModpackVersion ?? manifest.Version, prior?.RegisteredAt ?? DateTimeOffset.UtcNow, prior?.ManagedFiles ?? Array.Empty<string>())
-        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), VerifiedFiles = prior?.VerifiedFiles ?? new(StringComparer.OrdinalIgnoreCase), ProfilePublishedHashes = prior?.ProfilePublishedHashes ?? new(StringComparer.OrdinalIgnoreCase), LauncherRoot = root };
+        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), VerifiedFiles = prior?.VerifiedFiles ?? new(StringComparer.OrdinalIgnoreCase), ProfilePublishedHashes = prior?.ProfilePublishedHashes ?? new(StringComparer.OrdinalIgnoreCase), LauncherRoot = root, Edition = _paths.Edition };
         await SaveInstallationAsync(installation, ct).ConfigureAwait(false);
         return installation;
     }
@@ -110,7 +111,7 @@ public sealed class ExternalLauncherManager
     /// <c>.minecraft</c> inside each instance; the official launcher points a
     /// profile straight at a game directory.
     /// </summary>
-    private static string ContentRoot(ManagedInstallation installation) =>
+    internal static string ContentRoot(ManagedInstallation installation) =>
         ExternalLauncherDiscovery.MmcFamily.Contains(installation.Launcher)
             ? Path.Combine(installation.InstancePath, ".minecraft")
             : installation.InstancePath;
@@ -153,7 +154,7 @@ public sealed class ExternalLauncherManager
         var installation = new ManagedInstallation(id, "official",
             RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "windows" : "linux",
             target, true, prior?.ModpackVersion ?? manifest.Version, prior?.RegisteredAt ?? DateTimeOffset.UtcNow, prior?.ManagedFiles ?? Array.Empty<string>())
-        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), VerifiedFiles = prior?.VerifiedFiles ?? new(StringComparer.OrdinalIgnoreCase), ProfilePublishedHashes = prior?.ProfilePublishedHashes ?? new(StringComparer.OrdinalIgnoreCase), LauncherRoot = root };
+        { WriteOnceFiles = prior?.WriteOnceFiles ?? Array.Empty<string>(), VerifiedFiles = prior?.VerifiedFiles ?? new(StringComparer.OrdinalIgnoreCase), ProfilePublishedHashes = prior?.ProfilePublishedHashes ?? new(StringComparer.OrdinalIgnoreCase), LauncherRoot = root, Edition = _paths.Edition };
 
         await SaveInstallationAsync(installation, ct).ConfigureAwait(false);
         return installation;
@@ -362,7 +363,7 @@ public sealed class ExternalLauncherManager
         if (ExternalLauncherDiscovery.MmcFamily.Contains(installation.Launcher)) await WriteMmcPackAsync(installation.Launcher, installation.InstancePath, manifest, ct).ConfigureAwait(false);
         foreach (var stale in stamps.Keys.Where(key => !wanted.Contains(key)).ToArray()) stamps.Remove(stale);
         var profileHashes = selected.Where(file => PerformanceProfile.IsProfileFile(file.Path)).ToDictionary(file => file.Path, file => file.Sha256, StringComparer.OrdinalIgnoreCase);
-        var updated = installation with { ModpackVersion = manifest.Version, ManagedFiles = wanted.ToArray(), WriteOnceFiles = writeOnce.ToArray(), VerifiedFiles = stamps, ProfilePublishedHashes = profileHashes };
+        var updated = installation with { Edition = installation.Edition ?? _paths.Edition, ModpackVersion = manifest.Version, ManagedFiles = wanted.ToArray(), WriteOnceFiles = writeOnce.ToArray(), VerifiedFiles = stamps, ProfilePublishedHashes = profileHashes };
         await SaveInstallationAsync(updated, ct).ConfigureAwait(false);
         return updatedProfiles;
 
@@ -486,7 +487,7 @@ public sealed class ExternalLauncherManager
         return Path.Combine(root, "instances");
     }
 
-    private static void EnsureNoLinks(string root, string path)
+    internal static void EnsureNoLinks(string root, string path)
     {
         // Never follow instance symlinks/junctions into an unmanaged player's directory.
         var current = Path.GetFullPath(path);

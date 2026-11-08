@@ -306,5 +306,8 @@
   "error.launcher.updateTimeout": "The update timed out. Try again to resume.",
   "error.launcher.updateIntegrity": "The downloaded update is incomplete or corrupted. Nothing was installed.",
   "error.launcher.updateSpace": "There is not enough free space to safely install the update.",
-  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry."
+  "error.modpack.configConflict": "A pack update changed a configuration file you modified. Move or remove the file shown in technical details, then retry.",
+  "main.sync": "Sync modpack",
+  "main.syncing": "Syncing modpack",
+  "main.syncComplete": "Modpack sync complete."
 }

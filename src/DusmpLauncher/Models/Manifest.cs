@@ -10,6 +10,7 @@ namespace DusmpLauncher.Models;
 public sealed record ModpackManifest
 {
     [JsonPropertyName("version")] public string Version { get; init; } = "0.0.0";
+    [JsonPropertyName("edition")] public string? Edition { get; init; }
     [JsonPropertyName("minecraft")] public string Minecraft { get; init; } = "";
     [JsonPropertyName("loader")] public string Loader { get; init; } = "vanilla";
 

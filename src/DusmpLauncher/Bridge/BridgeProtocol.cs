@@ -41,6 +41,7 @@ public static class BridgeProtocol
         public const string SelectExternalLauncher = "selectExternalLauncher";
         public const string StartGame = "startGame";
         public const string StopGame = "stopGame";
+        public const string SyncNow = "syncNow";
         public const string OpenSettings = "openSettings";
         public const string GetSettings = "getSettings";
         public const string SaveSettings = "saveSettings";
